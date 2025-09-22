@@ -1,51 +1,39 @@
-import yaml
-from jinja2 import Template
+import os
+from dotenv import load_dotenv
+from azure.cosmos import CosmosClient
 
-def construct_sql_generator_prompt(config):
+load_dotenv()
 
-    # Build full table reference
-    config["FULL_TABLE"] = f"{config['database']['name']}.{config['database']['schema']}.{config['database']['table']}"
+COSMOS_DB_NAME = os.getenv('COSMOS_DB_NAME')
+COSMOS_ENDPOINT = os.getenv('COSMOS_ENDPOINT')
+COSMOS_KEY = os.getenv('COSMOS_KEY')
 
-    # Replace placeholders in examples/query_patterns with FULL_TABLE
-    for ex in config.get("examples", []):
-        ex["query"] = ex["query"].replace("{FULL_TABLE}", config["FULL_TABLE"])
+cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
 
-    for k, v in config.get("query_patterns", {}).items():
-        config["query_patterns"][k] = v.replace("{FULL_TABLE}", config["FULL_TABLE"])
+cosmos_database = cosmos_client.get_database_client(COSMOS_DB_NAME)
 
-    for i, r in enumerate(config.get("restrictions", [])):
-        config["restrictions"][i] = r.replace("{FULL_TABLE}", config["FULL_TABLE"])
+COSMOS_CONTAINERS = ['configs', 'utils']
 
-    for i, r in enumerate(config.get("rules", [])):
-        config["rules"][i] = r.replace("{FULL_TABLE}", config["FULL_TABLE"])
+container_clients = dict()
 
-    # Handle fields (schemas + examples + unique values)
-    for field in config.get("fields", []):
-        # Replace placeholder if you want table reference in descriptions/examples
-        if "examples" in field and isinstance(field["examples"], list):
-            field["examples"] = [ex.replace("{FULL_TABLE}", config["FULL_TABLE"]) if isinstance(ex, str) else ex for ex in field["examples"]]
+for container_name in COSMOS_CONTAINERS:
+    container_clients[container_name] = cosmos_database.get_container_client(container_name)
 
-        if "allowed_values" in field and isinstance(field["allowed_values"], list):
-            field["allowed_values"] = [val.replace("{FULL_TABLE}", config["FULL_TABLE"]) if isinstance(val, str) else val for val in field["allowed_values"]]
-
-    # Load template
-    with open("utils/prompt_templates/sql_generator_template.txt", "r", encoding="utf-8") as f:
-        template = Template(f.read())
-
-    # Render final prompt
-    SQL_GENERATOR_SYSTEM_PROMPT = template.render(**config)
-
-    return SQL_GENERATOR_SYSTEM_PROMPT
-
-# Load YAML
-with open("utils/config.yaml", "r", encoding="utf-8") as f:
-    config = yaml.safe_load(f)
+def get_from_cosmos(container_name = '', query = ''):
+    return list(container_clients[container_name].query_items(
+        query=query,
+        enable_cross_partition_query=True
+    ))
 
 
+SQL_GENERATOR_SYSTEM_PROMPT = get_from_cosmos('utils', 'SELECT VALUE c.util_content FROM c WHERE c.util_type = "sql_generator_prompt"')
 
+if not SQL_GENERATOR_SYSTEM_PROMPT:
+    import config_and_utils_generator
 
-SQL_GENERATOR_SYSTEM_PROMPT = construct_sql_generator_prompt(config = config)
+SQL_GENERATOR_SYSTEM_PROMPT = get_from_cosmos('utils', 'SELECT VALUE c.util_content FROM c WHERE c.util_type = "sql_generator_prompt"')
 
+SQL_GENERATOR_SYSTEM_PROMPT = SQL_GENERATOR_SYSTEM_PROMPT[0]
 
 with open("final_prompt.txt", 'w') as f:
     f.write(SQL_GENERATOR_SYSTEM_PROMPT)

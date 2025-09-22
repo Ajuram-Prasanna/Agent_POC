@@ -9,6 +9,7 @@ import threading
 import yaml
 from azure.cosmos import CosmosClient
 from jinja2 import Template
+from uuid import uuid1
 
 load_dotenv()
 
@@ -20,7 +21,7 @@ cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
 
 cosmos_database = cosmos_client.get_database_client(COSMOS_DB_NAME)
 
-COSMOS_CONTAINERS = ['configs']
+COSMOS_CONTAINERS = ['configs', 'utils']
 
 container_clients = dict()
 
@@ -33,7 +34,26 @@ def get_from_cosmos(container_name = '', query = ''):
         enable_cross_partition_query=True
     ))
 
+def upload_to_cosmos(container_name, item): 
+    container = container_clients[container_name]
+    
+    saved_item = container.upsert_item(item)
+    return saved_item
 
+def update_cosmos(container_name = '', query = '', item = {}):
+
+    existing_items = get_from_cosmos(container_name, query)
+    if not existing_items:
+        print(f"No items found in Cosmos DB for query: {query}")
+        return
+    
+    for existing_item in existing_items:
+    # Update the existing item with the new data
+        for key, value in item.items():
+            existing_item[key] = value
+
+        # Upsert the updated item back to Cosmos DB
+        upload_to_cosmos(container_name, existing_item)
 
 DATABASE_NAME = get_from_cosmos('configs', f'SELECT VALUE c.config_content FROM c WHERE c.config_type = "database"')[0]
 SCHEMA_NAME = get_from_cosmos('configs', f'SELECT VALUE c.config_content FROM c WHERE c.config_type = "schema"')[0]
@@ -328,7 +348,7 @@ def construct_sql_generator_prompt(config):
 
     # Load template
     
-    template = Template(get_from_cosmos('configs', 'SELECT VALUE c.config_content FROM c WHERE c.config_type = "sql_generator_prompt_template"')[0])
+    template = Template(get_from_cosmos('utils', 'SELECT VALUE c.util_content FROM c WHERE c.util_type = "sql_generator_prompt_template"')[0])
     
 
     # Render final prompt
@@ -406,4 +426,14 @@ config["query_patterns"] = query_patterns
 
 SQL_GENERATOR_SYSTEM_PROMPT = construct_sql_generator_prompt(config = config)
 
-print(SQL_GENERATOR_SYSTEM_PROMPT)
+
+if get_from_cosmos('utils', 'SELECT * FROM c WHERE c.util_type = "sql_generator_prompt"'):
+    update_cosmos('utils', 'SELECT * FROM c WHERE c.util_type = "sql_generator_prompt"', {
+        'util_content': SQL_GENERATOR_SYSTEM_PROMPT
+    })
+else:
+    upload_to_cosmos('utils', {
+        'id': str(uuid1()),
+        'util_type': 'sql_generator_prompt',
+        'util_content': SQL_GENERATOR_SYSTEM_PROMPT
+    })

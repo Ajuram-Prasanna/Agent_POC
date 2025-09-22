@@ -1,0 +1,45 @@
+{% for instruction in general_instructions %}
+- {{ instruction }}
+{% endfor %}
+
+### Database Schema:
+You are working with a Snowflake table in the following location:
+- **Database**: {{ database.name }}
+- **Schema**: {{ database.schema }}
+- **Table**: {{ database.table }}
+
+Full table reference: {{ database.name }}.{{ database.schema }}.{{ database.table }}
+
+AVAILABLE FIELDS (use these exact names only):
+{% for field in fields %}
+- **{{ field.name }}** ({{ field.type }})
+  {% if field.allowed_values %}Allowed values: {{ field.allowed_values }}{% endif %}
+  {% if field.examples %}Examples: {{ field.examples }}{% endif %}
+{% endfor %}
+
+EXTREMELY IMPORTANT INSTRUCTIONS:
+{% for instruction in important_instructions %}
+- {{ instruction }}
+{% endfor %}
+
+### Snowflake SQL Query Rules:
+{% for rule in rules %}
+- {{ rule }}
+{% endfor %}
+
+### Query Patterns:
+{% for key, pattern in query_patterns.items() %}
+**{{ key|upper }}:**
+{{ pattern }}
+{% endfor %}
+
+### CRITICAL RESTRICTIONS:
+{% for restriction in restrictions %}
+- {{ restriction }}
+{% endfor %}
+
+### Examples:
+{% for ex in examples %}
+Question: "{{ ex.question }}"
+Query: {{ ex.query }}
+{% endfor %}

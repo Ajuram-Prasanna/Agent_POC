@@ -744,163 +744,7 @@ async def invoke_sql_model(query: str) -> str:
         print(f"[ERROR] SQL generation failed: {e}")
         return f"Failed to generate SQL: {str(e)}"
 
-# Update the agent_call function to handle Azure Guardrails in conversational agent
-async def agent_call(query: str):
-    """Call the cached Azure AI Foundry conversational agent"""
-    try:
-        # Use cached project client
-        project_client = agent_cache.get_project_client()
-        
-        if project_client is None:
-            raise Exception("Azure AI Project client not initialized")
 
-        # Get cached or create thread for this session
-        session_id = cl.user_session.get("session_id")
-        convo_thread_id = agent_cache.get_or_create_thread(session_id)
-        
-        print(f"[DEBUG] === STREAMING AGENT CALL WITH CACHING ===")
-        print(f"[DEBUG] Using cached thread: {convo_thread_id}")
-        
-        # Add user message to thread
-        print(f"[DEBUG] Adding user message to thread")
-        
-        try:
-            message = project_client.agents.messages.create(
-                thread_id=convo_thread_id,
-                role="user",
-                content=query
-            )
-        except Exception as msg_error:
-            raise msg_error
-
-        # Create run
-        print(f"[DEBUG] Creating run...")
-        try:
-            run = project_client.agents.runs.create(
-                thread_id=convo_thread_id,
-                agent_id=os.getenv("CONVO_AGENT_ID")
-            )
-        except Exception as run_error:
-            raise run_error
-        
-        print(f"[DEBUG] Run created: {run.id}, Status: {run.status}")
-
-        
-        initial_response_sent = False
-        tool_calls_executed = []
-        final_response = None
-
-        while run.status in ["queued", "in_progress", "requires_action"]:
-            print(f"[DEBUG] Run status: {run.status}")
-            
-            if run.status == "requires_action":
-                print(f"[DEBUG] Run requires action - handling tool calls")
-                
-                required_action = run.required_action
-                if required_action and hasattr(required_action, 'submit_tool_outputs'):
-                    tool_calls = required_action.submit_tool_outputs.tool_calls
-                    
-                    if not initial_response_sent:
-                        messages = list(project_client.agents.messages.list(thread_id=convo_thread_id))
-                        
-                        for msg in messages:
-                            if (msg.role == 'assistant' and 
-                                hasattr(msg, 'run_id') and msg.run_id == run.id):
-                                if msg.content and len(msg.content) > 0:
-                                    initial_text = msg.content[0].text.value
-                                    if initial_text and not any(keyword in initial_text.lower() 
-                                                              for keyword in ['successfully retrieved', 'function', 'tool']):
-                                        print(f"[DEBUG] Found initial response: {initial_text}")
-                                        
-                                        initial_msg = cl.Message(content=initial_text)
-                                        await initial_msg.send()
-                                        initial_response_sent = True
-                                        break
-                    
-                    tool_outputs = []
-                    for tool_call in tool_calls:
-                        print(f"[DEBUG] Executing tool: {tool_call.function.name}")
-                        
-                        try:
-                            result = await execute_tool_call(tool_call)
-                            tool_outputs.append({
-                                "tool_call_id": tool_call.id,
-                                "output": json.dumps(result)
-                            })
-                            tool_calls_executed.append(tool_call.function.name)
-                            print(f"[DEBUG] Tool executed successfully: {tool_call.function.name}")
-                            
-                        except Exception as tool_error:
-                            print(f"[ERROR] Tool execution failed: {tool_error}")
-                            tool_outputs.append({
-                                "tool_call_id": tool_call.id,
-                                "output": json.dumps({"error": str(tool_error)})
-                            })
-
-                    print(f"[DEBUG] Submitting {len(tool_outputs)} tool outputs")
-                    try:
-                        run = project_client.agents.runs.submit_tool_outputs(
-                            thread_id=convo_thread_id,
-                            run_id=run.id,
-                            tool_outputs=tool_outputs
-                        )
-                    except Exception as submit_error:
-                        raise submit_error
-            
-            await asyncio.sleep(0.2)
-            
-            try:
-                run = project_client.agents.runs.get(
-                    thread_id=convo_thread_id,
-                    run_id=run.id
-                )
-            except Exception as get_error:
-                raise get_error
-
-        print(f"[DEBUG] Final run status: {run.status}")
-
-        if run.status == "completed":
-            messages = list(project_client.agents.messages.list(thread_id=convo_thread_id))
-            
-            for msg in messages:
-                if (msg.role == 'assistant' and 
-                    hasattr(msg, 'run_id') and msg.run_id == run.id):
-                    if msg.content and len(msg.content) > 0:
-                        msg_text = msg.content[0].text.value
-                        
-                        if initial_response_sent and msg_text and len(msg_text.strip()) > 10:
-                            if not any(keyword in msg_text.lower() 
-                                     for keyword in ['successfully retrieved', 'function result']):
-                                final_response = msg_text
-                                break
-                        elif not initial_response_sent:
-                            final_response = msg_text
-                            break
-
-        if not final_response:
-            if tool_calls_executed:
-                final_response = "I've retrieved the requested data for you."
-            else:
-                final_response = "I apologize, but I wasn't able to process your request properly. Please try rephrasing your question."
-
-        return {
-            "initial_response": None,
-            "final_response": final_response,
-            "steps": [],
-            "tool_calls_executed": tool_calls_executed
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Streaming agent call failed: {e}")
-        import traceback
-        print(f"[ERROR] Full traceback: {traceback.format_exc()}")
-        return {
-            "initial_response": None,
-            "final_response": f"I encountered an error processing your request: {str(e)}. Please try again.",
-            "steps": [],
-            "tool_calls_executed": []
-        }
-    
 def is_azure_guardrails_response(response_text):
     """
     Check if a response text indicates that Azure Guardrails has filtered the content
@@ -1500,23 +1344,22 @@ async def handle_dataframe_with_plots(result, interaction_id, session_id):
 def query_to_dataframe(sql_query):
     """Execute SQL query and return DataFrame with connection management"""
     try:
-        with connection_manager.get_connection() as conn:
-            cur = conn.cursor()
-            try:
-                cur.execute(sql_query)
-                # Fetch all rows and get column names
-                rows = cur.fetchall()
-                cols = [col[0] for col in cur.description]
-                # Convert to DataFrame
-                df = pd.DataFrame(rows, columns=cols)
-                return df
-            except Exception as e:
-                print(f"[ERROR] SQL execution failed: {e}")
-                return pd.DataFrame()
-            finally:
-                cur.close()
+        response = requests.get(url = "http://localhost:7071/api/get_snowflake_data", json = {"sql": sql_query})
+
+        # return func.HttpResponse({"df": df}, status_code=200)
+
+        if response.status_code == 200:
+            data = response.json()
+            # Convert back to DataFrame
+            df = pd.DataFrame(data["df"])
+            
+            print(f"[DEBUG] Query executed successfully, retrieved {len(df)} rows and {len(df.columns)} columns")
+            return df
+        else:
+            print(f"[ERROR] Query failed with status code {response.status_code}: {response.text}")
+            return pd.DataFrame()
     except Exception as e:
-        print(f"[ERROR] Connection failed: {e}")
+        print(f"[ERROR] Snowflake API Call failed: {e}")
         return pd.DataFrame()
 
 def clean_dataframe_for_display(df):
@@ -1587,6 +1430,7 @@ credential = ClientSecretCredential(
 )
 
 
+convo_thread_id = None
 
 _global_query_results = {}
 
@@ -1721,6 +1565,7 @@ async def starters():
 # Modified startup function - remove SQL agent thread creation
 @cl.on_chat_start
 async def start():
+    global convo_thread_id
     """Enhanced startup with caching"""
     print("=== CACHED AGENT INITIALIZATION ===")
     print(f"Convo Agent ID: {os.getenv('CONVO_AGENT_ID')}")
@@ -1739,6 +1584,8 @@ async def start():
         # Pre-warm SQL client cache
         get_sql_client()
         print("[CACHE] OpenAI SQL client pre-warmed")
+
+        convo_thread_id = agent_cache.get_or_create_thread(session_id)
         
     except Exception as e:
         print(f"❌ Agent cache setup error: {e}")
@@ -1779,9 +1626,66 @@ def get_cache_stats():
         "connection_pool_size": len(connection_manager.connection_pool)
     }
 
+import json
+import re
+
+def clean_and_parse_events(events_string):
+    """
+    Clean up and convert events string into a proper Python list.
+    
+    Args:
+        events_string (str): The raw events string that needs cleaning
+        
+    Returns:
+        list: Parsed events as a Python list of dictionaries
+    """
+    try:
+        # Method 1: Try direct JSON parsing first (fastest if it works)
+        if events_string.strip().startswith('['):
+            return json.loads(events_string)
+    except json.JSONDecodeError:
+        pass
+    
+    try:
+        # Method 2: Clean up common issues and try JSON again
+        cleaned = events_string.strip()
+        
+        # Remove any trailing/leading whitespace and newlines
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        
+        # Fix single quotes to double quotes for JSON compliance
+        cleaned = re.sub(r"'([^']*)':", r'"\1":', cleaned)  # Fix keys
+        cleaned = re.sub(r":\s*'([^']*)'", r': "\1"', cleaned)  # Fix string values
+        
+        # Handle boolean values
+        cleaned = cleaned.replace("'True'", "true").replace("'False'", "false")
+        cleaned = cleaned.replace(": True", ": true").replace(": False", ": false")
+        
+        # Handle None values
+        cleaned = cleaned.replace(": None", ": null")
+        
+        return json.loads(cleaned)
+        
+    except (json.JSONDecodeError, Exception):
+        # Method 3: If JSON fails, try eval with safety measures
+        try:
+            # Only use eval as last resort with basic safety check
+            if not re.search(r'import|exec|eval|__', events_string):
+                return eval(events_string)
+        except:
+            pass
+    
+    # If all methods fail, return empty list and print error
+    print("Error: Could not parse events string")
+    return []
+
 # Update the handle_message function to properly handle content filtering
 @cl.on_message
 async def handle_message(msg):
+    global convo_thread_id
+    print("-" * 50)
+    print(convo_thread_id)
+    print("-" * 50)
     total_start_time = time.time()
     query = msg.content
     hist = cl.user_session.get("message_history") or []
@@ -1827,11 +1731,75 @@ async def handle_message(msg):
         agent_start = time.time()
         
         # Call the streaming agent - initial response is sent within this call
-        result = await agent_call(query)
+        result = requests.post(url="http://localhost:7071/api/invoke_convo_agent", json={
+            "message": query,
+            "convo_thread_id": convo_thread_id
+        })
+
+        result = b''.join(result).decode('utf-8')
         
         agent_latency = time.time() - agent_start
         print(f"[DEBUG] Streaming agent call completed in {agent_latency:.2f}s")
 
+
+        events = []
+        lines = result.strip().split('\n')
+
+        current_event = {}
+        for line in lines:
+            line = line.strip()
+            
+            # Skip empty lines
+            if not line:
+                # If we have a current event, save it and start a new one
+                if current_event:
+                    events.append(current_event)
+                    current_event = {}
+                continue
+            
+            if line.startswith('event: '):
+                # If we already have an event in progress, save it first
+                if current_event:
+                    events.append(current_event)
+                    current_event = {}
+                current_event['event_type'] = line[7:].strip()
+            elif line.startswith('data: '):
+                data_str = line[6:].strip()
+                try:
+                    # Try to parse as JSON
+                    current_event['data'] = json.loads(data_str)
+                except json.JSONDecodeError:
+                    # If not JSON, store as string
+                    current_event['data'] = data_str
+            elif line.startswith('id: '):
+                current_event['id'] = line[4:].strip()
+            elif line.startswith('retry: '):
+                current_event['retry'] = int(line[7:].strip())
+
+        # Don't forget the last event if there's no trailing empty line
+        if current_event:
+            events.append(current_event)
+
+        # Write to file
+        with open('events.jsonl', 'w') as f:
+            for event in events:
+                f.write(json.dumps(event) + '\n')
+
+        result = dict()
+
+        result["tool_calls_executed"] = False
+
+        for event in events:
+            if event.get('event_type') == 'initial_response':
+                result["initial_response"] = event.get('data', {}).get('content', '')
+            if event.get('event_type') == 'final_response':
+                result["final_response"] = event.get('data', {}).get('content', '')
+            if event.get('event_type') == 'tool_execution':
+                if event.get('data', {}).get('status', '') == 'completed':
+                    result["tool_calls_executed"] = True
+                    result["sql"] = event.get('data', {}).get('output', '')
+
+        '''
         # Check if content was filtered by the agent
         if result.get("content_filtered", False):
             print(f"[CONTENT_FILTER] Content was filtered by agent, sending filtered response")
@@ -1854,6 +1822,8 @@ async def handle_message(msg):
             total_duration = time.time() - total_start_time
             print(f"[TOTAL TIME FOR FILTERED QUESTION] {total_duration:.2f} seconds")
             return
+
+        
 
         # Check if the final response itself indicates content filtering
         final_response = result.get("final_response", "")
@@ -1883,50 +1853,46 @@ async def handle_message(msg):
             total_duration = time.time() - total_start_time
             print(f"[TOTAL TIME FOR FILTERED QUESTION] {total_duration:.2f} seconds")
             return
+        '''
 
         # Continue with normal processing for non-filtered content
-        # Check for stored results from tool execution
-        stored_result = None
-        result_key = None
-        
-        # Try multiple approaches to get the stored result
-        try:
-            result_key = cl.user_session.get("latest_result_key")
-            if result_key and result_key in _global_query_results:
-                stored_result = _global_query_results[result_key]
-                print(f"[DEBUG] Found result using session key: {result_key}")
-        except:
-            pass
-            
-        if not stored_result:
-            try:
-                stored_result = cl.user_session.get("latest_query_result")
-                if stored_result:
-                    print(f"[DEBUG] Found result in session storage")
-            except:
-                pass
-        
-        if not stored_result:
-            query_hash = hash(query)
-            for key, value in _global_query_results.items():
-                if key.startswith(interaction_id) or key.endswith(str(query_hash)):
-                    stored_result = value
-                    result_key = key
-                    print(f"[DEBUG] Found result by searching global storage: {key}")
-                    break
 
-        # Display the DataFrame if we found results
-        if stored_result and stored_result.get("success"):
-            print(f"[DEBUG] Displaying stored result...")
-            await handle_dataframe_with_plots(stored_result, interaction_id, session_id)
+        print(result)
+
+        if result.get("initial_response"):
+            initial_response = result["initial_response"]
+            initial_msg = cl.Message(content=initial_response)
+            await initial_msg.send()
+
+            # Log the initial response
+            log_interaction_details(
+                message_id=interaction_id,
+                session_id=session_id,
+                process_name="initial_response",
+                processor="Convo Agent",
+                process_input=query,
+                process_output=initial_response.replace('\n', ' ')
+            )
+        
+
+        if result.get("tool_calls_executed", False) and result.get("sql"):
+            sql = result.get('sql')
+            data_result = await execute_sql_and_get_dataframe(sql)
             
-            # Clean up the result
-            if result_key and result_key in _global_query_results:
-                del _global_query_results[result_key]
-                print(f"[DEBUG] Cleaned up global result: {result_key}")
+            df = data_result.get("data")
+
+            complete_result = {
+                "data": df,
+                "debug": {"sql": sql, "raw_result": df.to_dict(orient="records")},
+                "success": True
+            }
+
+            await handle_dataframe_with_plots(complete_result, interaction_id, session_id)
+        
 
         # Send final response only if we have one and tools were executed
-        if final_response and result.get("tool_calls_executed"):
+        if result.get('final_response') and result.get("tool_calls_executed"):
+            final_response = result["final_response"]
             final_msg = cl.Message(content=final_response)
             await final_msg.send()
 
@@ -1952,7 +1918,8 @@ async def handle_message(msg):
             await feedback_msg.send()
             current_feedback_msg = feedback_msg
 
-        elif final_response and not result.get("tool_calls_executed"):
+        elif result.get("final_response") and not result.get("tool_calls_executed"):
+            final_response = result.get("final_response")
             # If no tools were executed, send the final response as a regular conversation
             final_msg = cl.Message(content=final_response)
             await final_msg.send()

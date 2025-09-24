@@ -1,1 +1,0 @@
-{"columns":["LOAN_TYPE","TOTAL_AMOUNT","LOAN_COUNT"],"index":[0,1,2,3,4,5],"data":[["Business Loan",281370292.0,198],["Refinance",227076645.0,248],["Construction Loan",294952851.0,221],["Personal Loan",9223007.0,216],["Car Loan",20219339.0,265],["Home Loan",209368817.0,196]]}

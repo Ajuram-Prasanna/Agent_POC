@@ -1,0 +1,15 @@
+{"event_type": "status", "data": {"message": "Processing your request..."}}
+{"event_type": "status", "data": {"message": "Message added to thread"}}
+{"event_type": "status", "data": {"message": "Run created: run_yWccd3Z4XNA5BiHGaAssDxho"}}
+{"event_type": "status", "data": {"message": "Run status: RunStatus.QUEUED"}}
+{"event_type": "status", "data": {"message": "Run status: RunStatus.IN_PROGRESS"}}
+{"event_type": "status", "data": {"message": "Run status: RunStatus.IN_PROGRESS"}}
+{"event_type": "status", "data": {"message": "Run status: RunStatus.REQUIRES_ACTION"}}
+{"event_type": "initial_response", "data": {"content": "Let me pull up the number of loans handled by each agent for you..."}}
+{"event_type": "tool_execution", "data": {"tool_name": "process_user_query", "status": "executing"}}
+{"event_type": "tool_execution", "data": {"tool_name": "process_user_query", "status": "completed", "output": "SELECT AGENT_NAME, COUNT(*) as LOAN_COUNT\nFROM BI3_LLM_POC.LLM_SCHEMA.LOAN_DATA\nGROUP BY AGENT_NAME"}}
+{"event_type": "status", "data": {"message": "Tool outputs submitted"}}
+{"event_type": "status", "data": {"message": "Run status: RunStatus.IN_PROGRESS"}}
+{"event_type": "status", "data": {"message": "Run status: RunStatus.IN_PROGRESS"}}
+{"event_type": "final_response", "data": {"content": "Here are the loan counts for each agent. If you're interested, I can also show you which agent has the highest total loan amount\u2014just let me know if you'd like to see that!"}}
+{"event_type": "completed", "data": {"tool_calls_executed": ["process_user_query"], "status": "success"}}

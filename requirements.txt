@@ -15,4 +15,4 @@ seaborn
 azure-identity
 azure-ai-projects
 azure-cosmos
-uuid
+azure-functions
